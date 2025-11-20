@@ -68,15 +68,74 @@ class MasterclassAnalyzer:
             return False
     
     def load_crm_data(self, file_path):
-        """Load CRM data with lead info and RM assignments"""
+        """
+        Load CRM data with actual Zoho field names
+        
+        Expected Zoho CRM Export columns:
+        - Record Id
+        - First Name, Last Name
+        - Email (this is the Lead's email address - used to match with Zoom)
+        - Lead Owner (RM name)
+        - Lead Status
+        - Lead Source
+        - Industry/Field of Work (optional)
+        """
         try:
             df = pd.read_csv(file_path)
+            
+            # Print original columns for debugging
+            original_cols = df.columns.tolist()
+            print(f"  CRM columns: {original_cols}")
+            
+            # Keep original case for specific fields, normalize others
+            df.columns = df.columns.str.strip()
+            
+            # Build column mapping
+            column_mapping = {}
+            for col in df.columns:
+                col_lower = col.lower()
+                if col_lower == 'email':  # This is the Lead's email
+                    column_mapping['lead_email'] = col
+                elif 'lead owner' in col_lower:
+                    column_mapping['lead_owner'] = col
+                elif col_lower in ['first name', 'firstname']:
+                    column_mapping['first_name'] = col
+                elif col_lower in ['last name', 'lastname']:
+                    column_mapping['last_name'] = col
+                elif 'lead status' in col_lower:
+                    column_mapping['lead_status'] = col
+                elif 'lead source' in col_lower:
+                    column_mapping['lead_source'] = col
+                elif 'industry' in col_lower or 'field of work' in col_lower:
+                    column_mapping['industry'] = col
+                elif col_lower in ['record id', 'recordid']:
+                    column_mapping['record_id'] = col
+            
+            # Create standardized columns for matching
+            if 'lead_email' in column_mapping:
+                # Normalize email for matching with Zoom
+                df['email'] = df[column_mapping['lead_email']].str.strip().str.lower()
+            
+            if 'lead_owner' in column_mapping:
+                df['rm_name'] = df[column_mapping['lead_owner']]
+            
+            if 'lead_status' in column_mapping:
+                df['status'] = df[column_mapping['lead_status']]
+            
+            if 'industry' in column_mapping:
+                df['profile'] = df[column_mapping['industry']]
+            
+            # Normalize all other column names for easier access
             df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+            
             self.crm_data = df
             print(f"✓ Loaded {len(df)} CRM records")
+            print(f"  Mapped fields: {list(column_mapping.keys())}")
             return True
         except Exception as e:
             print(f"✗ Error loading CRM data: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def match_participants_with_crm(self):
