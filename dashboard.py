@@ -138,7 +138,108 @@ if st.session_state.get('analyzed', False):
     st.header("⏰ Exit Timeline Analysis")
     if 'exit_timeline' in analyzer.insights:
         timeline_df = analyzer.insights['exit_timeline']
+        exit_stats = analyzer.insights.get('exit_stats', {})
         
+        # Overall Statistics Section
+        if exit_stats:
+            st.subheader("📊 Overall Attendance Statistics")
+            
+            # Show warning if waiting room data exists
+            if exit_stats.get('has_waiting_room_data') and exit_stats.get('waiting_room_count', 0) > 0:
+                st.warning(f"""
+                ⚠️ **Waiting Room Alert:** {exit_stats['waiting_room_count']} people ({round(exit_stats['waiting_room_count']/exit_stats['total_participants']*100, 1)}%) 
+                were stuck in the waiting room and never admitted to the masterclass!
+                
+                Statistics below show data for **all {exit_stats['total_participants']} participants** (including waiting room).
+                Scroll down to see data for **actual attendees only** ({exit_stats['actual_attendees']} people).
+                """)
+                st.markdown("---")
+            
+            # All Participants Stats (including waiting room if any)
+            st.markdown(f"### 📈 All Participants ({exit_stats['total_participants']} people)")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    label="Left in First 5 Minutes",
+                    value=f"{exit_stats['left_0_5']} people",
+                    delta=f"-{exit_stats['left_0_5_pct']}%",
+                    delta_color="inverse"
+                )
+            
+            with col2:
+                st.metric(
+                    label="Left in First 10 Minutes",
+                    value=f"{exit_stats['left_0_10']} people",
+                    delta=f"-{exit_stats['left_0_10_pct']}%",
+                    delta_color="inverse"
+                )
+            
+            with col3:
+                st.metric(
+                    label="Stayed 60+ Minutes",
+                    value=f"{exit_stats['stayed_60_plus']} people",
+                    delta=f"+{exit_stats['stayed_60_plus_pct']}%",
+                    delta_color="normal"
+                )
+            
+            with col4:
+                st.metric(
+                    label="Stayed 100+ Minutes",
+                    value=f"{exit_stats['stayed_100_plus']} people",
+                    delta=f"+{exit_stats['stayed_100_plus_pct']}%",
+                    delta_color="normal"
+                )
+            
+            # Actual Attendees Stats (excluding waiting room)
+            if exit_stats.get('has_waiting_room_data') and exit_stats.get('waiting_room_count', 0) > 0:
+                st.markdown("---")
+                st.markdown(f"### ✅ Actual Attendees Only ({exit_stats['actual_attendees']} people)")
+                st.info(f"""
+                These statistics **exclude** the {exit_stats['waiting_room_count']} people stuck in waiting room.
+                This shows TRUE engagement from people who were actually admitted to the masterclass.
+                
+                **Average Duration (Admitted):** {exit_stats['avg_duration_admitted']} minutes
+                """)
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        label="Left in First 5 Minutes",
+                        value=f"{exit_stats['left_0_5_admitted']} people",
+                        delta=f"-{exit_stats['left_0_5_admitted_pct']}%",
+                        delta_color="inverse"
+                    )
+                
+                with col2:
+                    st.metric(
+                        label="Left in First 10 Minutes",
+                        value=f"{exit_stats['left_0_10_admitted']} people",
+                        delta=f"-{exit_stats['left_0_10_admitted_pct']}%",
+                        delta_color="inverse"
+                    )
+                
+                with col3:
+                    st.metric(
+                        label="Stayed 60+ Minutes",
+                        value=f"{exit_stats['stayed_60_plus_admitted']} people",
+                        delta=f"+{exit_stats['stayed_60_plus_admitted_pct']}%",
+                        delta_color="normal"
+                    )
+                
+                with col4:
+                    st.metric(
+                        label="Stayed 100+ Minutes",
+                        value=f"{exit_stats['stayed_100_plus_admitted']} people",
+                        delta=f"+{exit_stats['stayed_100_plus_admitted_pct']}%",
+                        delta_color="normal"
+                    )
+        
+        st.markdown("---")
+        
+        # Drop-off Curve
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=timeline_df['minute'],
