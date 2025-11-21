@@ -12,31 +12,91 @@ class MasterclassAnalyzer:
         self.insights = {}
         
     def load_zoom_participants(self, file_path):
-        """Load Zoom participant report CSV"""
+        """
+        Load Zoom participant report CSV with automatic deduplication
+        
+        Zoom creates multiple rows when people leave and rejoin.
+        This method automatically:
+        1. Detects duplicates by email
+        2. Groups by email
+        3. Sums total duration for each unique person
+        """
         try:
             # Zoom participant report typically has: Name, Email, Join Time, Leave Time, Duration (Minutes)
             df = pd.read_csv(file_path)
             
+            original_count = len(df)
+            print(f"  Raw Zoom data: {original_count} rows")
+            
             # Standardize column names
             df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+            
+            # Find email column before deduplication
+            email_col = 'email' if 'email' in df.columns else None
+            
+            if not email_col:
+                print("  ⚠️ Warning: No email column found - cannot deduplicate")
+            else:
+                # Check for duplicates
+                unique_emails = df[email_col].nunique()
+                if unique_emails < original_count:
+                    duplicate_count = original_count - unique_emails
+                    print(f"  ⚠️  Found {duplicate_count} duplicate entries (people who left/rejoined)")
+                    print(f"  📧 Deduplicating to {unique_emails} unique participants...")
+                    
+                    # Find duration column
+                    duration_col = None
+                    for col in df.columns:
+                        if 'duration' in col and 'minute' in col:
+                            duration_col = col
+                            break
+                    
+                    if duration_col:
+                        # Clean and convert duration to numeric first
+                        df['duration_numeric'] = pd.to_numeric(
+                            df[duration_col].astype(str).str.extract(r'(\d+)')[0],
+                            errors='coerce'
+                        ).fillna(0)
+                        
+                        # Group by email and sum durations, keep first for other fields
+                        agg_dict = {'duration_numeric': 'sum'}
+                        for col in df.columns:
+                            if col not in [email_col, duration_col, 'duration_numeric']:
+                                agg_dict[col] = 'first'
+                        
+                        df = df.groupby(email_col, as_index=False).agg(agg_dict)
+                        
+                        # Replace duration column with summed values
+                        df[duration_col] = df['duration_numeric']
+                        df = df.drop('duration_numeric', axis=1)
+                        
+                        print(f"  ✓ Deduplicated to {len(df)} unique participants")
+                    else:
+                        print("  ⚠️ Warning: Could not find duration column to sum")
             
             # Convert duration to numeric (handle formats like "45 min" or just "45")
             if 'duration_(minutes)' in df.columns:
                 df['duration_mins'] = pd.to_numeric(
                     df['duration_(minutes)'].astype(str).str.extract(r'(\d+)')[0],
                     errors='coerce'
-                )
+                ).fillna(0)
             elif 'duration' in df.columns:
                 df['duration_mins'] = pd.to_numeric(
                     df['duration'].astype(str).str.extract(r'(\d+)')[0],
                     errors='coerce'
-                )
+                ).fillna(0)
+            
+            # Standardize email column
+            if 'email' in df.columns:
+                df['email'] = df['email'].str.strip().str.lower()
             
             self.participants_data = df
-            print(f"✓ Loaded {len(df)} participant records")
+            print(f"✓ Loaded {len(df)} unique participant(s)")
             return True
         except Exception as e:
             print(f"✗ Error loading participants: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def load_zoom_chat(self, file_path):
@@ -68,15 +128,75 @@ class MasterclassAnalyzer:
             return False
     
     def load_crm_data(self, file_path):
-        """Load CRM data with lead info and RM assignments"""
+        """
+        Load CRM data with actual Zoho field names
+        
+        Expected Zoho CRM Export columns:
+        - Record Id
+        - First Name, Last Name
+        - Email (this is the Lead's email address - used to match with Zoom)
+        - Lead Owner (RM name)
+        - Lead Status
+        - Lead Source
+        - Industry/Field of Work (optional)
+        """
         try:
             df = pd.read_csv(file_path)
-            df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+            
+            # Print original columns for debugging
+            original_cols = df.columns.tolist()
+            print(f"  CRM original columns: {original_cols}")
+            
+            # Strip whitespace from column names
+            df.columns = df.columns.str.strip()
+            
+            # Build column mapping (before normalization)
+            column_mapping = {}
+            for col in df.columns:
+                col_lower = col.lower()
+                if col_lower == 'email':  # This is the Lead's email
+                    column_mapping['email_col'] = col
+                elif 'lead owner' in col_lower:
+                    column_mapping['lead_owner'] = col
+                elif col_lower in ['first name', 'firstname']:
+                    column_mapping['first_name'] = col
+                elif col_lower in ['last name', 'lastname']:
+                    column_mapping['last_name'] = col
+                elif 'lead status' in col_lower:
+                    column_mapping['lead_status'] = col
+                elif 'lead source' in col_lower:
+                    column_mapping['lead_source'] = col
+                elif 'industry' in col_lower or 'field of work' in col_lower:
+                    column_mapping['industry'] = col
+                elif col_lower in ['record id', 'recordid']:
+                    column_mapping['record_id'] = col
+            
+            # Create standardized columns for matching
+            if 'email_col' in column_mapping:
+                # Store normalized email in 'email' column (lowercase for matching)
+                df['email'] = df[column_mapping['email_col']].str.strip().str.lower()
+                print(f"  Created 'email' column from '{column_mapping['email_col']}'")
+            
+            if 'lead_owner' in column_mapping:
+                df['rm_name'] = df[column_mapping['lead_owner']]
+            
+            if 'lead_status' in column_mapping:
+                df['status'] = df[column_mapping['lead_status']]
+            
+            if 'industry' in column_mapping:
+                df['profile'] = df[column_mapping['industry']]
+            
+            # Don't normalize column names - keep them as-is
+            # This prevents conflicts with the 'email' column we just created
+            
             self.crm_data = df
             print(f"✓ Loaded {len(df)} CRM records")
+            print(f"  Final columns: {df.columns.tolist()[:10]}...")  # Show first 10
             return True
         except Exception as e:
             print(f"✗ Error loading CRM data: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def match_participants_with_crm(self):
@@ -85,16 +205,49 @@ class MasterclassAnalyzer:
             print("✗ Missing participant or CRM data")
             return False
         
-        # Merge on email (primary key)
-        email_col = 'email' if 'email' in self.participants_data.columns else 'user_email'
-        crm_email_col = 'email' if 'email' in self.crm_data.columns else 'lead_email'
+        print(f"  Participant columns: {self.participants_data.columns.tolist()}")
+        print(f"  CRM columns: {self.crm_data.columns.tolist()}")
         
+        # Find email column in participants data
+        participant_email_col = None
+        for col in self.participants_data.columns:
+            if col.lower() in ['email', 'user_email', 'email_address']:
+                participant_email_col = col
+                break
+        
+        if not participant_email_col:
+            print("✗ Could not find email column in participants data")
+            return False
+        
+        # Find email column in CRM data
+        crm_email_col = None
+        for col in self.crm_data.columns:
+            if col.lower() in ['email', 'lead_email', 'email_address']:
+                crm_email_col = col
+                break
+        
+        if not crm_email_col:
+            print("✗ Could not find email column in CRM data")
+            return False
+        
+        print(f"  Merging on: participants[{participant_email_col}] = crm[{crm_email_col}]")
+        
+        # Normalize emails before merge
+        self.participants_data['email_normalized'] = self.participants_data[participant_email_col].str.strip().str.lower()
+        self.crm_data['email_normalized'] = self.crm_data[crm_email_col].str.strip().str.lower()
+        
+        # Merge on normalized email
         merged = self.participants_data.merge(
             self.crm_data,
-            left_on=email_col,
-            right_on=crm_email_col,
-            how='left'
+            left_on='email_normalized',
+            right_on='email_normalized',
+            how='left',
+            suffixes=('', '_crm')
         )
+        
+        # Keep the original email column from participants
+        if 'email' not in merged.columns and participant_email_col != 'email':
+            merged['email'] = merged[participant_email_col]
         
         self.participants_data = merged
         matched_count = merged[crm_email_col].notna().sum()
@@ -118,7 +271,9 @@ class MasterclassAnalyzer:
             
             # Component 2: Chat Participation (30%)
             chat_score = 0
-            if self.chat_data is not None and len(self.chat_data) > 0:
+            participant_messages = pd.DataFrame()  # Initialize empty
+            
+            if self.chat_data is not None and len(self.chat_data) > 0 and 'sender' in self.chat_data.columns:
                 participant_messages = self.chat_data[
                     self.chat_data['sender'].str.contains(name, case=False, na=False)
                 ]
@@ -127,7 +282,7 @@ class MasterclassAnalyzer:
             
             # Component 3: Questions Asked (20%)
             question_score = 0
-            if self.chat_data is not None and len(self.chat_data) > 0:
+            if len(participant_messages) > 0 and 'is_question' in participant_messages.columns:
                 questions = participant_messages[participant_messages['is_question'] == True]
                 question_count = len(questions)
                 question_score = min(question_count * 10, 20)  # 10 points per question, max 20
@@ -166,7 +321,7 @@ class MasterclassAnalyzer:
         return True
     
     def analyze_exit_timeline(self, total_duration_mins=60, interval_mins=5):
-        """Analyze when participants dropped off"""
+        """Analyze when participants dropped off with comprehensive statistics"""
         if self.participants_data is None:
             return None
         
@@ -192,6 +347,73 @@ class MasterclassAnalyzer:
         
         self.insights['exit_timeline'] = timeline_df
         self.insights['critical_dropoff_moments'] = critical_moments
+        
+        # Calculate comprehensive statistics
+        total_participants = len(self.participants_data)
+        
+        # Check for waiting room column
+        has_waiting_room = 'in_waiting_room' in self.participants_data.columns
+        if has_waiting_room:
+            waiting_room_count = len(self.participants_data[
+                self.participants_data['in_waiting_room'].astype(str).str.lower() == 'yes'
+            ])
+            actual_attendees = total_participants - waiting_room_count
+        else:
+            waiting_room_count = 0
+            actual_attendees = total_participants
+        
+        # Duration buckets - Overall
+        left_0_5 = len(self.participants_data[self.participants_data['duration_mins'] <= 5])
+        left_0_10 = len(self.participants_data[self.participants_data['duration_mins'] <= 10])
+        stayed_60_plus = len(self.participants_data[self.participants_data['duration_mins'] >= 60])
+        stayed_100_plus = len(self.participants_data[self.participants_data['duration_mins'] >= 100])
+        
+        # Calculate for actual attendees (excluding waiting room)
+        if has_waiting_room and actual_attendees > 0:
+            admitted = self.participants_data[
+                self.participants_data['in_waiting_room'].astype(str).str.lower() != 'yes'
+            ]
+            left_0_5_admitted = len(admitted[admitted['duration_mins'] <= 5])
+            left_0_10_admitted = len(admitted[admitted['duration_mins'] <= 10])
+            stayed_60_plus_admitted = len(admitted[admitted['duration_mins'] >= 60])
+            stayed_100_plus_admitted = len(admitted[admitted['duration_mins'] >= 100])
+            avg_duration_admitted = admitted['duration_mins'].mean()
+        else:
+            left_0_5_admitted = left_0_5
+            left_0_10_admitted = left_0_10
+            stayed_60_plus_admitted = stayed_60_plus
+            stayed_100_plus_admitted = stayed_100_plus
+            avg_duration_admitted = self.participants_data['duration_mins'].mean()
+        
+        exit_stats = {
+            'total_participants': total_participants,
+            'waiting_room_count': waiting_room_count,
+            'actual_attendees': actual_attendees,
+            'has_waiting_room_data': has_waiting_room,
+            
+            # Overall stats (including waiting room)
+            'left_0_5': left_0_5,
+            'left_0_5_pct': round((left_0_5 / total_participants) * 100, 1) if total_participants > 0 else 0,
+            'left_0_10': left_0_10,
+            'left_0_10_pct': round((left_0_10 / total_participants) * 100, 1) if total_participants > 0 else 0,
+            'stayed_60_plus': stayed_60_plus,
+            'stayed_60_plus_pct': round((stayed_60_plus / total_participants) * 100, 1) if total_participants > 0 else 0,
+            'stayed_100_plus': stayed_100_plus,
+            'stayed_100_plus_pct': round((stayed_100_plus / total_participants) * 100, 1) if total_participants > 0 else 0,
+            
+            # Admitted attendees stats (excluding waiting room)
+            'left_0_5_admitted': left_0_5_admitted,
+            'left_0_5_admitted_pct': round((left_0_5_admitted / actual_attendees) * 100, 1) if actual_attendees > 0 else 0,
+            'left_0_10_admitted': left_0_10_admitted,
+            'left_0_10_admitted_pct': round((left_0_10_admitted / actual_attendees) * 100, 1) if actual_attendees > 0 else 0,
+            'stayed_60_plus_admitted': stayed_60_plus_admitted,
+            'stayed_60_plus_admitted_pct': round((stayed_60_plus_admitted / actual_attendees) * 100, 1) if actual_attendees > 0 else 0,
+            'stayed_100_plus_admitted': stayed_100_plus_admitted,
+            'stayed_100_plus_admitted_pct': round((stayed_100_plus_admitted / actual_attendees) * 100, 1) if actual_attendees > 0 else 0,
+            'avg_duration_admitted': round(avg_duration_admitted, 1)
+        }
+        
+        self.insights['exit_stats'] = exit_stats
         
         print(f"✓ Analyzed exit timeline with {len(timeline)} data points")
         return timeline_df
@@ -344,7 +566,12 @@ class MasterclassAnalyzer:
             hot_leads = warm_leads = cold_leads = 0
         
         chat_messages = len(self.chat_data) if self.chat_data is not None else 0
-        questions_asked = len(self.chat_data[self.chat_data['is_question']]) if self.chat_data is not None else 0
+        
+        # Handle questions - check if column exists
+        if self.chat_data is not None and 'is_question' in self.chat_data.columns:
+            questions_asked = len(self.chat_data[self.chat_data['is_question']])
+        else:
+            questions_asked = 0
         
         summary = {
             'total_participants': total_participants,
