@@ -31,12 +31,32 @@ class MasterclassAnalyzer:
             # Standardize column names
             df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
             
-            # Find email column before deduplication
+            # Find and convert duration column to numeric FIRST (before deduplication)
+            duration_col = None
+            for col in df.columns:
+                if 'duration' in col and 'minute' in col:
+                    duration_col = col
+                    break
+            
+            if duration_col:
+                # Convert duration to numeric (handle formats like "45 min", "45", or 45)
+                df['duration_mins'] = pd.to_numeric(
+                    df[duration_col].astype(str).str.extract(r'(\d+)')[0],
+                    errors='coerce'
+                ).fillna(0)
+            else:
+                print("  ⚠️ Warning: Could not find duration column")
+                df['duration_mins'] = 0
+            
+            # Find email column
             email_col = 'email' if 'email' in df.columns else None
             
             if not email_col:
                 print("  ⚠️ Warning: No email column found - cannot deduplicate")
             else:
+                # Standardize email column
+                df[email_col] = df[email_col].str.strip().str.lower()
+                
                 # Check for duplicates
                 unique_emails = df[email_col].nunique()
                 if unique_emails < original_count:
@@ -44,55 +64,31 @@ class MasterclassAnalyzer:
                     print(f"  ⚠️  Found {duplicate_count} duplicate entries (people who left/rejoined)")
                     print(f"  📧 Deduplicating to {unique_emails} unique participants...")
                     
-                    # Find duration column
-                    duration_col = None
-                    for col in df.columns:
-                        if 'duration' in col and 'minute' in col:
-                            duration_col = col
-                            break
+                    # Group by email and sum durations, keep first for other fields
+                    agg_dict = {'duration_mins': 'sum'}  # Sum the numeric duration
                     
-                    if duration_col:
-                        # Clean and convert duration to numeric first
-                        df['duration_numeric'] = pd.to_numeric(
-                            df[duration_col].astype(str).str.extract(r'(\d+)')[0],
-                            errors='coerce'
-                        ).fillna(0)
-                        
-                        # Group by email and sum durations, keep first for other fields
-                        agg_dict = {'duration_numeric': 'sum'}
-                        for col in df.columns:
-                            if col not in [email_col, duration_col, 'duration_numeric']:
-                                agg_dict[col] = 'first'
-                        
-                        df = df.groupby(email_col, as_index=False).agg(agg_dict)
-                        
-                        # Replace duration column with summed values
-                        df[duration_col] = df['duration_numeric']
-                        df = df.drop('duration_numeric', axis=1)
-                        
-                        print(f"  ✓ Deduplicated to {len(df)} unique participants")
-                    else:
-                        print("  ⚠️ Warning: Could not find duration column to sum")
+                    for col in df.columns:
+                        if col not in [email_col, 'duration_mins', duration_col]:
+                            agg_dict[col] = 'first'
+                    
+                    df = df.groupby(email_col, as_index=False).agg(agg_dict)
+                    
+                    print(f"  ✓ Deduplicated to {len(df)} unique participants")
+                    print(f"  ✓ Total durations summed for each person")
             
-            # Convert duration to numeric (handle formats like "45 min" or just "45")
-            if 'duration_(minutes)' in df.columns:
-                df['duration_mins'] = pd.to_numeric(
-                    df['duration_(minutes)'].astype(str).str.extract(r'(\d+)')[0],
-                    errors='coerce'
-                ).fillna(0)
-            elif 'duration' in df.columns:
-                df['duration_mins'] = pd.to_numeric(
-                    df['duration'].astype(str).str.extract(r'(\d+)')[0],
-                    errors='coerce'
-                ).fillna(0)
-            
-            # Standardize email column
-            if 'email' in df.columns:
-                df['email'] = df['email'].str.strip().str.lower()
+            # Create standardized email column if not exists
+            if 'email' not in df.columns and email_col:
+                df['email'] = df[email_col]
             
             self.participants_data = df
             print(f"✓ Loaded {len(df)} unique participant(s)")
+            print(f"  Columns available: {df.columns.tolist()}")
             return True
+        except Exception as e:
+            print(f"✗ Error loading participants: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
         except Exception as e:
             print(f"✗ Error loading participants: {e}")
             import traceback
